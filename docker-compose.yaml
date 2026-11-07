@@ -1,0 +1,90 @@
+services:
+
+  broker:
+    build: ./python
+    container_name: broker
+    command: python broker.py
+
+  servidor_js_1:
+    build: ./node
+    command: node servidor.js
+    environment:
+      NOME: servidor_js_1
+      BROKER: tcp://broker:5556
+    volumes:
+      - ./dados:/dados
+    depends_on:
+      - broker
+
+  servidor_js_2:
+    build: ./node
+    command: node servidor.js
+    environment:
+      NOME: servidor_js_2
+      BROKER: tcp://broker:5556
+    volumes:
+      - ./dados:/dados
+    depends_on:
+      - broker
+
+  servidor_py_1:
+    build: ./python
+    command: python servidor.py
+    environment:
+      NOME: servidor_py_1
+      BROKER: tcp://broker:5556
+    volumes:
+      - ./dados:/dados
+    depends_on:
+      - broker
+
+  servidor_py_2:
+    build: ./python
+    command: python servidor.py
+    environment:
+      NOME: servidor_py_2
+      BROKER: tcp://broker:5556
+    volumes:
+      - ./dados:/dados
+    depends_on:
+      - broker
+
+  bot_js_1:
+    build: ./node
+    command: node bot.js
+    environment:
+      NOME: bot_js_1
+      BROKER: tcp://broker:5555
+    depends_on:
+      - servidor_js_1
+      - servidor_py_1
+
+  bot_js_2:
+    build: ./node
+    command: node bot.js
+    environment:
+      NOME: bot_js_2
+      BROKER: tcp://broker:5555
+    depends_on:
+      - servidor_js_1
+      - servidor_py_1
+
+  bot_py_1:
+    build: ./python
+    command: python bot.py
+    environment:
+      NOME: bot_py_1
+      BROKER: tcp://broker:5555
+    depends_on:
+      - servidor_js_1
+      - servidor_py_1
+
+  bot_py_2:
+    build: ./python
+    command: python bot.py
+    environment:
+      NOME: bot_py_2
+      BROKER: tcp://broker:5555
+    depends_on:
+      - servidor_js_1
+      - servidor_py_1
