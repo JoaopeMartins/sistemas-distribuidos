@@ -8,12 +8,23 @@ from armazenamento import Armazenamento
 
 NOME = os.environ.get("NOME", "servidor_py")
 BROKER = os.environ.get("BROKER", "tcp://broker:5556")
+PROXY = os.environ.get("PROXY", "tcp://proxy:5557")
 
 REGRA_CANAL = re.compile(r"^[a-z0-9_-]{3,20}$")
 
 disco = Armazenamento(NOME)
 canais = disco.carregar_canais()
 usuarios = set()
+
+context = zmq.Context()
+
+publicador = context.socket(zmq.PUB)
+publicador.connect(PROXY)
+
+
+def publicar(canal, envelope):
+    """Frame 1 e o topico em texto, frame 2 o envelope binario."""
+    publicador.send_multipart([canal.encode(), empacotar(envelope)])
 
 
 def tratar(pedido):
@@ -41,13 +52,34 @@ def tratar(pedido):
     if tipo == "listar_canais":
         return criar("listar_canais_resp", NOME, {"canais": canais}, "ok")
 
+    if tipo == "publicar":
+        canal = dados.get("canal", "").strip()
+        texto = dados.get("mensagem", "")
+
+        if not REGRA_CANAL.match(canal):
+            return criar("publicar_resp", NOME, {"mensagem": "nome de canal invalido"}, "erro")
+        if texto == "":
+            return criar("publicar_resp", NOME, {"mensagem": "mensagem vazia"}, "erro")
+
+        publicacao = criar("publicacao", NOME, {
+            "canal": canal,
+            "mensagem": texto,
+            "autor": pedido["origem"],
+        })
+
+        publicar(canal, publicacao)
+        print(formatar(f"{NOME} PUBLICOU em {canal}", publicacao), flush=True)
+
+        disco.gravar("publicacao", {"canal": canal, "mensagem": texto, "autor": pedido["origem"]})
+        return criar("publicar_resp", NOME, {"mensagem": f"publicado em {canal}"}, "ok")
+
     return criar("erro", NOME, {"mensagem": f"tipo desconhecido: {tipo}"}, "erro")
 
 
-context = zmq.Context()
 socket = context.socket(zmq.REP)
 socket.connect(BROKER)
 
+print(f"{NOME} publicador conectado ao proxy em {PROXY}", flush=True)
 print(f"{NOME} conectado ao broker em {BROKER}", flush=True)
 print(f"{NOME} canais recuperados do disco: {canais}", flush=True)
 

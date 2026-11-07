@@ -1,6 +1,8 @@
 import os
 import random
+import threading
 import time
+from datetime import datetime, timezone
 
 import zmq
 
@@ -8,14 +10,22 @@ from mensagem import criar, empacotar, desempacotar, formatar
 
 NOME = os.environ.get("NOME", "bot_py")
 BROKER = os.environ.get("BROKER", "tcp://broker:5555")
-INTERVALO = float(os.environ.get("INTERVALO", 3))
+PROXY = os.environ.get("PROXY", "tcp://proxy:5558")
+
+PALAVRAS = ["oi", "tudo bem", "bom dia", "alguem ai", "testando", "ate mais"]
 
 context = zmq.Context()
 socket = context.socket(zmq.REQ)
+inscritor = context.socket(zmq.SUB)
+
+inscritos = []
+
+
+def mensagem_aleatoria():
+    return f"{random.choice(PALAVRAS)} #{random.randint(0, 999)}"
 
 
 def pedir(tipo, dados):
-    """Envia um pedido e devolve a resposta do servidor."""
     pedido = criar(tipo, NOME, dados)
     print(formatar(f"{NOME} ENVIOU", pedido), flush=True)
     socket.send(empacotar(pedido))
@@ -26,7 +36,6 @@ def pedir(tipo, dados):
 
 
 def login():
-    """Em caso de erro, o login e repetido."""
     while True:
         resposta = pedir("login", {"usuario": NOME})
         if resposta["status"] == "ok":
@@ -35,9 +44,31 @@ def login():
         time.sleep(2)
 
 
-def nome_aleatorio():
-    return f"canal-{random.randint(0, 999)}"
+def escutar():
+    """Escuta as publicacoes dos canais em que o bot esta inscrito."""
+    while True:
+        canal, bruto = inscritor.recv_multipart()
+        publicacao = desempacotar(bruto)
+        enviado = datetime.fromtimestamp(publicacao["timestamp"], timezone.utc).isoformat()
+        recebido = datetime.now(timezone.utc).isoformat()
+        print(
+            f"[{NOME} RECEBEU PUBLICACAO] canal={canal.decode()} "
+            f"autor={publicacao['dados']['autor']} "
+            f"mensagem=\"{publicacao['dados']['mensagem']}\" "
+            f"enviado={enviado} recebido={recebido}",
+            flush=True,
+        )
 
+
+def inscrever(canal):
+    inscritor.setsockopt_string(zmq.SUBSCRIBE, canal)
+    inscritos.append(canal)
+    print(f"{NOME} inscrito no canal {canal} (total: {len(inscritos)})", flush=True)
+
+
+inscritor.connect(PROXY)
+print(f"{NOME} inscritor conectado ao proxy em {PROXY}", flush=True)
+threading.Thread(target=escutar, daemon=True).start()
 
 socket.connect(BROKER)
 print(f"{NOME} conectado ao broker em {BROKER}", flush=True)
@@ -50,6 +81,21 @@ while True:
     canais = resposta["dados"].get("canais", [])
 
     if len(canais) < 5:
-        pedir("criar_canal", {"canal": nome_aleatorio()})
+        novo = f"canal-{random.randint(0, 999)}"
+        r = pedir("criar_canal", {"canal": novo})
+        if r["status"] == "ok":
+            canais.append(novo)
 
-    time.sleep(INTERVALO)
+    # Inscricao aleatoria, ate 3 canais
+    livres = [c for c in canais if c not in inscritos]
+    if len(inscritos) < 3 and livres:
+        inscrever(random.choice(livres))
+        time.sleep(0.5)
+
+    if canais:
+        canal = random.choice(canais)
+        for _ in range(10):
+            pedir("publicar", {"canal": canal, "mensagem": mensagem_aleatoria()})
+            time.sleep(1)
+    else:
+        time.sleep(1)
