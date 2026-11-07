@@ -4,7 +4,6 @@ import time
 
 PASTA = "/dados"
 
-
 class Armazenamento:
     def __init__(self, nome_servidor):
         self.caminho = os.path.join(PASTA, f"{nome_servidor}.jsonl")
