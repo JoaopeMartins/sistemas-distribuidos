@@ -12,10 +12,13 @@ de mensagens e containers para a execução.
   persistência em disco nos servidores.
 - **Parte 2** — publicação em canais via Publisher-Subscriber, inscrição dos
   bots em tópicos e persistência das publicações.
+- **Parte 3** — relógio lógico de Lamport em todas as mensagens e serviço de
+  referência para rank, lista de servidores, heartbeat e sincronização do
+  relógio físico.
 
 ## Arquitetura
 
-Dois caminhos independentes de comunicação:
+Três caminhos independentes de comunicação:
 
 ```
 Request-Reply (pedidos dos bots aos servidores)
@@ -23,8 +26,10 @@ bot (REQ) → broker:5555 (ROUTER) → (DEALER) broker:5556 → servidor (REP)
 
 Publisher-Subscriber (publicações dos servidores aos bots)
 servidor (PUB) → proxy:5557 (XSUB) → (XPUB) proxy:5558 → bot (SUB)
-```
 
+Serviço de referência (apenas servidores, sem passar pelo broker)
+servidor (REQ) → referencia:5559 (REP)
+```
 
 O broker e o proxy são repassadores puros: nenhum dos dois desempacota o
 conteúdo das mensagens. Por isso funcionam igual com bots e servidores
@@ -36,8 +41,8 @@ round-robin, sem nenhuma lógica de distribuição escrita por nós. No proxy, o
 inverso, do XPUB para o XSUB — sem isso os sockets PUB descartariam as
 mensagens por não haver inscritos conhecidos.
 
-Containers em execução: 1 broker, 1 proxy, 4 servidores (2 por integrante) e
-4 bots (2 por integrante).
+Containers em execução: 1 broker, 1 proxy, 1 serviço de referência,
+4 servidores (2 por integrante) e 4 bots (2 por integrante).
 
 ## Escolhas feitas
 
@@ -48,8 +53,9 @@ servidor completos na sua linguagem, e as quatro combinações se comunicam
 entre si — o bot em Node conversa com o servidor em Python e vice-versa,
 tanto no Request-Reply quanto no Pub/Sub.
 
-O broker e o proxy foram escritos em Python por serem componentes únicos e
-independentes das implementações de cliente e servidor.
+O broker, o proxy e o serviço de referência foram escritos em Python por
+serem componentes únicos e independentes das implementações de cliente e
+servidor.
 
 ### Serialização: MessagePack
 
@@ -75,12 +81,12 @@ Mesmo envelope para pedidos, respostas e publicações:
 | `tipo` | string | ação, tipo da resposta ou `publicacao` |
 | `origem` | string | quem enviou |
 | `timestamp` | float | epoch em segundos, UTC |
-| `relogio` | int | relógio lógico (Parte 3; zero nestas entregas) |
+| `relogio` | int | relógio lógico de Lamport de quem envia |
 | `status` | string | `ok` ou `erro`, apenas nas respostas |
 | `dados` | map | conteúdo específico do tipo |
 
-O campo `relogio` já existe, zerado, para que a adição do relógio lógico na
-Parte 3 não exija mudança no formato.
+O campo `relogio` foi previsto desde a Parte 1, zerado, justamente para que a
+adição do relógio lógico na Parte 3 não exigisse mudança no formato.
 
 O timestamp é sempre em **segundos**. Em Node, `Date.now()` devolve
 milissegundos, então o valor é dividido por 1000 antes do envio.
@@ -109,6 +115,55 @@ O SUB filtra pelo primeiro frame e desserializa o segundo. O payload continua
 binário, como o enunciado exige; o frame do tópico é metadado de roteamento,
 da mesma natureza do envelope de endereçamento que o próprio ZeroMQ já usa
 nos sockets ROUTER.
+
+### Relógio lógico
+
+O relógio de Lamport é um contador por processo, implementado dentro do
+próprio módulo `mensagem` em cada linguagem. As duas regras do enunciado
+ficam embutidas nas funções que todo processo já usa:
+
+- `criar()` incrementa o contador antes de montar o envelope;
+- `desempacotar()` sincroniza o contador local com o máximo entre ele e o
+  valor recebido.
+
+Como consequência, bots, servidores e serviço de referência obedecem ao
+relógio lógico sem nenhuma linha extra no código de cada um — basta usarem o
+módulo. O log mostra os dois valores lado a lado: `relogio=` é o que veio na
+mensagem e `local=` é o contador do processo depois da sincronização.
+
+### Serviço de referência
+
+Processo separado que conversa apenas com os servidores, nunca com os bots.
+Diferente dos servidores, ele faz `bind` direto na porta 5559 e não passa
+pelo broker, porque não há balanceamento a fazer: é um serviço único.
+
+Operações:
+
+| pedido | `dados` | resposta | `dados` |
+|---|---|---|---|
+| `rank` | `{servidor}` | `rank_resp` | `{rank}` |
+| `list` | `{}` | `list_resp` | `{servidores: [{servidor, rank}]}` |
+| `heartbeat` | `{servidor}` | `heartbeat_resp` | `{mensagem, hora}` |
+
+Cada servidor pede o seu rank ao iniciar. Nomes repetidos recebem sempre o
+mesmo rank, conforme o enunciado. A cada 10 mensagens de clientes recebidas,
+o servidor envia um heartbeat e aproveita a resposta para obter a hora
+correta.
+
+Duas decisões de implementação:
+
+**Remoção por tempo.** O enunciado pede que o servidor saia da lista se não
+enviar heartbeat, mas não define o critério. Adotamos um limite de 30
+segundos desde o último sinal, verificado a cada pedido recebido. Como o
+socket REP é síncrono, essa verificação no momento do pedido dispensa uma
+thread de vigilância separada.
+
+**O ajuste do relógio físico é guardado, não aplicado.** Um container não
+pode alterar o relógio do sistema do host, então cada servidor armazena a
+diferença entre a hora recebida e a sua própria, e uma função
+`hora_corrigida()` devolve o valor ajustado. É o procedimento usual em
+sincronização de relógios e será reaproveitado na Parte 4, com o algoritmo
+de Berkeley.
 
 ### Tratamento de erros
 
@@ -190,7 +245,7 @@ no canal, independentemente de qual servidor publicou.
 docker compose up --build
 ```
 
-Sobem 10 containers. Tanto os bots quanto os servidores imprimem na tela
+Sobem 11 containers. Tanto os bots quanto os servidores imprimem na tela
 cada mensagem enviada e recebida, com o conteúdo completo do envelope.
 
 ## Estrutura
@@ -198,25 +253,25 @@ cada mensagem enviada e recebida, com o conteúdo completo do envelope.
 ```
 .
 ├── docker-compose.yaml
-├── dados/ # um .jsonl por servidor
+├── dados/                      # um .jsonl por servidor
 ├── node/
-│ ├── Dockerfile
-│ ├── package.json
-│ ├── mensagem.js # envelope e MessagePack
-│ ├── armazenamento.js # persistência em JSONL
-│ ├── servidor.js
-│ └── bot.js
+│   ├── Dockerfile
+│   ├── package.json
+│   ├── mensagem.js             # envelope, MessagePack e relógio lógico
+│   ├── armazenamento.js        # persistência em JSONL
+│   ├── servidor.js
+│   └── bot.js
 └── python/
-├── Dockerfile
-├── requirements.txt
-├── mensagem.py
-├── armazenamento.py
-├── servidor.py
-├── bot.py
-├── broker.py # ROUTER/DEALER do Request-Reply
-└── proxy.py # XSUB/XPUB do Pub/Sub
+    ├── Dockerfile
+    ├── requirements.txt
+    ├── mensagem.py
+    ├── armazenamento.py
+    ├── servidor.py
+    ├── bot.py
+    ├── broker.py               # ROUTER/DEALER do Request-Reply
+    ├── proxy.py                # XSUB/XPUB do Pub/Sub
+    └── referencia.py           # rank, lista, heartbeat e hora
 ```
-
 
 ## Integrantes
 
