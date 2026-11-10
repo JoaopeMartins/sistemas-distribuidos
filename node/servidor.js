@@ -5,6 +5,7 @@ const { Armazenamento } = require("./armazenamento");
 const NOME = process.env.NOME || "servidor_js";
 const BROKER = process.env.BROKER || "tcp://broker:5556";
 const PROXY = process.env.PROXY || "tcp://proxy:5557";
+const REFERENCIA = process.env.REFERENCIA || "tcp://referencia:5559";
 
 const REGRA_CANAL = /^[a-z0-9_-]{3,20}$/;
 
@@ -13,8 +14,53 @@ const canais = disco.carregarCanais();
 const usuarios = new Set();
 
 const publicador = new zmq.Publisher();
+const refSocket = new zmq.Request();
 
-// Publica no canal: frame 1 e o topico em texto, frame 2 o envelope binario
+let rank = null;
+let recebidas = 0;
+
+// Diferenca entre a hora do servico de referencia e a local
+let ajuste = 0;
+
+function horaCorrigida() {
+  return Date.now() / 1000 + ajuste;
+}
+
+// Conversa com o servico de referencia e devolve a resposta
+async function perguntarReferencia(tipo, dados) {
+  const pedido = criar(tipo, NOME, dados);
+  console.log(formatar(`${NOME} ENVIOU A REFERENCIA`, pedido));
+  await refSocket.send(empacotar(pedido));
+
+  const [quadro] = await refSocket.receive();
+  const resposta = desempacotar(quadro);
+  console.log(formatar(`${NOME} RECEBEU DA REFERENCIA`, resposta));
+  return resposta;
+}
+
+async function pedirRank() {
+  const resposta = await perguntarReferencia("rank", { servidor: NOME });
+  if (resposta.status === "ok") {
+    rank = resposta.dados.rank;
+    console.log(`${NOME} recebeu rank ${rank}`);
+  }
+}
+
+async function heartbeat() {
+  const resposta = await perguntarReferencia("heartbeat", { servidor: NOME });
+  if (resposta.status === "ok" && resposta.dados.hora) {
+    ajuste = resposta.dados.hora - Date.now() / 1000;
+    console.log(`${NOME} ajustou o relogio fisico em ${ajuste.toFixed(6)}s`);
+  }
+
+  // Aproveita para ver quem mais esta no ar
+  const lista = await perguntarReferencia("list", {});
+  if (lista.status === "ok") {
+    const nomes = lista.dados.servidores.map((s) => `${s.servidor}(${s.rank})`);
+    console.log(`${NOME} servidores conhecidos: ${nomes.join(", ")}`);
+  }
+}
+
 async function publicar(canal, envelope) {
   await publicador.send([canal, empacotar(envelope)]);
 }
@@ -77,6 +123,10 @@ async function tratar(pedido) {
 }
 
 async function main() {
+  await refSocket.connect(REFERENCIA);
+  console.log(`${NOME} conectado a referencia em ${REFERENCIA}`);
+  await pedirRank();
+
   await publicador.connect(PROXY);
   console.log(`${NOME} publicador conectado ao proxy em ${PROXY}`);
 
@@ -93,6 +143,13 @@ async function main() {
     console.log(formatar(`${NOME} ENVIOU`, resposta));
 
     await socket.send(empacotar(resposta));
+
+    // Heartbeat a cada 10 mensagens de clientes
+    recebidas += 1;
+    if (recebidas % 10 === 0) {
+      console.log(`${NOME} atingiu ${recebidas} mensagens, enviando heartbeat`);
+      await heartbeat();
+    }
   }
 }
 

@@ -1,5 +1,6 @@
 import os
 import re
+import time
 
 import zmq
 
@@ -9,6 +10,7 @@ from armazenamento import Armazenamento
 NOME = os.environ.get("NOME", "servidor_py")
 BROKER = os.environ.get("BROKER", "tcp://broker:5556")
 PROXY = os.environ.get("PROXY", "tcp://proxy:5557")
+REFERENCIA = os.environ.get("REFERENCIA", "tcp://referencia:5559")
 
 REGRA_CANAL = re.compile(r"^[a-z0-9_-]{3,20}$")
 
@@ -16,10 +18,56 @@ disco = Armazenamento(NOME)
 canais = disco.carregar_canais()
 usuarios = set()
 
+rank = None
+recebidas = 0
+
+# Diferenca entre a hora do servico de referencia e a local
+ajuste = 0.0
+
 context = zmq.Context()
 
 publicador = context.socket(zmq.PUB)
 publicador.connect(PROXY)
+
+ref_socket = context.socket(zmq.REQ)
+ref_socket.connect(REFERENCIA)
+
+
+def hora_corrigida():
+    return time.time() + ajuste
+
+
+def perguntar_referencia(tipo, dados):
+    """Conversa com o servico de referencia e devolve a resposta."""
+    pedido = criar(tipo, NOME, dados)
+    print(formatar(f"{NOME} ENVIOU A REFERENCIA", pedido), flush=True)
+    ref_socket.send(empacotar(pedido))
+
+    resposta = desempacotar(ref_socket.recv())
+    print(formatar(f"{NOME} RECEBEU DA REFERENCIA", resposta), flush=True)
+    return resposta
+
+
+def pedir_rank():
+    global rank
+    resposta = perguntar_referencia("rank", {"servidor": NOME})
+    if resposta["status"] == "ok":
+        rank = resposta["dados"]["rank"]
+        print(f"{NOME} recebeu rank {rank}", flush=True)
+
+
+def heartbeat():
+    global ajuste
+    resposta = perguntar_referencia("heartbeat", {"servidor": NOME})
+    if resposta["status"] == "ok" and "hora" in resposta["dados"]:
+        ajuste = resposta["dados"]["hora"] - time.time()
+        print(f"{NOME} ajustou o relogio fisico em {ajuste:.6f}s", flush=True)
+
+    # Aproveita para ver quem mais esta no ar
+    lista = perguntar_referencia("list", {})
+    if lista["status"] == "ok":
+        nomes = [f"{s['servidor']}({s['rank']})" for s in lista["dados"]["servidores"]]
+        print(f"{NOME} servidores conhecidos: {', '.join(nomes)}", flush=True)
 
 
 def publicar(canal, envelope):
@@ -76,6 +124,9 @@ def tratar(pedido):
     return criar("erro", NOME, {"mensagem": f"tipo desconhecido: {tipo}"}, "erro")
 
 
+print(f"{NOME} conectado a referencia em {REFERENCIA}", flush=True)
+pedir_rank()
+
 socket = context.socket(zmq.REP)
 socket.connect(BROKER)
 
@@ -91,3 +142,9 @@ while True:
     print(formatar(f"{NOME} ENVIOU", resposta), flush=True)
 
     socket.send(empacotar(resposta))
+
+    # Heartbeat a cada 10 mensagens de clientes
+    recebidas += 1
+    if recebidas % 10 == 0:
+        print(f"{NOME} atingiu {recebidas} mensagens, enviando heartbeat", flush=True)
+        heartbeat()

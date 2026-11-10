@@ -10,6 +10,11 @@ services:
     container_name: proxy
     command: python proxy.py
 
+  referencia:
+    build: ./python
+    container_name: referencia
+    command: python referencia.py
+
   servidor_js_1:
     build: ./node
     command: node servidor.js
@@ -17,11 +22,13 @@ services:
       NOME: servidor_js_1
       BROKER: tcp://broker:5556
       PROXY: tcp://proxy:5557
+      REFERENCIA: tcp://referencia:5559
     volumes:
       - ./dados:/dados
     depends_on:
       - broker
       - proxy
+      - referencia
 
   servidor_js_2:
     build: ./node
@@ -30,11 +37,13 @@ services:
       NOME: servidor_js_2
       BROKER: tcp://broker:5556
       PROXY: tcp://proxy:5557
+      REFERENCIA: tcp://referencia:5559
     volumes:
       - ./dados:/dados
     depends_on:
       - broker
       - proxy
+      - referencia
 
   servidor_py_1:
     build: ./python
@@ -43,11 +52,13 @@ services:
       NOME: servidor_py_1
       BROKER: tcp://broker:5556
       PROXY: tcp://proxy:5557
+      REFERENCIA: tcp://referencia:5559
     volumes:
       - ./dados:/dados
     depends_on:
       - broker
       - proxy
+      - referencia
 
   servidor_py_2:
     build: ./python
@@ -56,11 +67,13 @@ services:
       NOME: servidor_py_2
       BROKER: tcp://broker:5556
       PROXY: tcp://proxy:5557
+      REFERENCIA: tcp://referencia:5559
     volumes:
       - ./dados:/dados
     depends_on:
       - broker
       - proxy
+      - referencia
 
   bot_js_1:
     build: ./node
