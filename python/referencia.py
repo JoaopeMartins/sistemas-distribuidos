@@ -8,10 +8,8 @@ from mensagem import criar, empacotar, desempacotar, formatar
 NOME = os.environ.get("NOME", "referencia")
 PORTA = os.environ.get("PORTA", "5559")
 
-# Tempo sem heartbeat para o servidor sair da lista
 LIMITE = float(os.environ.get("LIMITE", 30))
 
-# nome do servidor -> {"rank": int, "visto": timestamp}
 servidores = {}
 proximo_rank = 0
 
@@ -36,7 +34,6 @@ def tratar(pedido):
         if nome == "":
             return criar("rank_resp", NOME, {"mensagem": "nome vazio"}, "erro")
 
-        # Sem repeticoes de nome: quem ja tem rank recebe o mesmo
         if nome not in servidores:
             global proximo_rank
             proximo_rank += 1
@@ -57,8 +54,7 @@ def tratar(pedido):
             return criar("heartbeat_resp", NOME, {"mensagem": "servidor nao registrado"}, "erro")
 
         servidores[nome]["visto"] = time.time()
-        # Aproveita o heartbeat para devolver a hora correta
-        return criar("heartbeat_resp", NOME, {"mensagem": "OK", "hora": time.time()}, "ok")
+        return criar("heartbeat_resp", NOME, {"mensagem": "OK"}, "ok")
 
     return criar("erro", NOME, {"mensagem": f"tipo desconhecido: {tipo}"}, "erro")
 
