@@ -1,0 +1,124 @@
+services:
+
+  broker:
+    build: ./python
+    container_name: broker
+    command: python broker.py
+
+  proxy:
+    build: ./python
+    container_name: proxy
+    command: python proxy.py
+
+  referencia:
+    build: ./python
+    container_name: referencia
+    command: python referencia.py
+
+  servidor_js_1:
+    build: ./node
+    command: node servidor.js
+    restart: on-failure
+    environment:
+      NOME: servidor_js_1
+      BROKER: tcp://broker:5556
+      PROXY: tcp://proxy:5557
+      REFERENCIA: tcp://referencia:5559
+    volumes:
+      - ./dados:/dados
+    depends_on:
+      - broker
+      - proxy
+      - referencia
+
+  servidor_js_2:
+    build: ./node
+    command: node servidor.js
+    restart: on-failure
+    environment:
+      NOME: servidor_js_2
+      BROKER: tcp://broker:5556
+      PROXY: tcp://proxy:5557
+      REFERENCIA: tcp://referencia:5559
+    volumes:
+      - ./dados:/dados
+    depends_on:
+      - broker
+      - proxy
+      - referencia
+
+  servidor_py_1:
+    build: ./python
+    command: python servidor.py
+    restart: on-failure
+    environment:
+      NOME: servidor_py_1
+      BROKER: tcp://broker:5556
+      PROXY: tcp://proxy:5557
+      REFERENCIA: tcp://referencia:5559
+    volumes:
+      - ./dados:/dados
+    depends_on:
+      - broker
+      - proxy
+      - referencia
+
+  servidor_py_2:
+    build: ./python
+    command: python servidor.py
+    restart: on-failure
+    environment:
+      NOME: servidor_py_2
+      BROKER: tcp://broker:5556
+      PROXY: tcp://proxy:5557
+      REFERENCIA: tcp://referencia:5559
+    volumes:
+      - ./dados:/dados
+    depends_on:
+      - broker
+      - proxy
+      - referencia
+
+  bot_js_1:
+    build: ./node
+    command: node bot.js
+    environment:
+      NOME: bot_js_1
+      BROKER: tcp://broker:5555
+      PROXY: tcp://proxy:5558
+    depends_on:
+      - servidor_js_1
+      - servidor_py_1
+
+  bot_js_2:
+    build: ./node
+    command: node bot.js
+    environment:
+      NOME: bot_js_2
+      BROKER: tcp://broker:5555
+      PROXY: tcp://proxy:5558
+    depends_on:
+      - servidor_js_1
+      - servidor_py_1
+
+  bot_py_1:
+    build: ./python
+    command: python bot.py
+    environment:
+      NOME: bot_py_1
+      BROKER: tcp://broker:5555
+      PROXY: tcp://proxy:5558
+    depends_on:
+      - servidor_js_1
+      - servidor_py_1
+
+  bot_py_2:
+    build: ./python
+    command: python bot.py
+    environment:
+      NOME: bot_py_2
+      BROKER: tcp://broker:5555
+      PROXY: tcp://proxy:5558
+    depends_on:
+      - servidor_js_1
+      - servidor_py_1
