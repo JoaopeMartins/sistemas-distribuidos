@@ -27,6 +27,8 @@ rank = None
 coordenador = None
 recebidas = 0
 ajuste = 0.0
+contador_eventos = 0
+ids_vistos = disco.carregar_ids()
 precisa_eleger = False
 
 context = zmq.Context()
@@ -179,6 +181,41 @@ def sincronizar_relogio():
 def heartbeat():
     perguntar_referencia("heartbeat", {"servidor": NOME})
 
+def registrar(evento, conteudo):
+    """Grava localmente e replica o evento para os outros servidores."""
+    global contador_eventos
+
+    contador_eventos += 1
+    registro = {
+        "id": f"{NOME}-{contador_eventos}",
+        "evento": evento,
+        "timestamp": hora_corrigida(),
+        "conteudo": conteudo,
+    }
+
+    ids_vistos.add(registro["id"])
+    disco.gravar_registro(registro)
+
+    replica = criar("replica", NOME, {"registro": registro})
+    publicar(TOPICO_SERVIDORES, replica)
+    print(f"{NOME} replicou {registro['id']} ({evento})", flush=True)
+
+
+def aplicar_replica(registro):
+    """Aplica um evento vindo de outro servidor, se ainda nao foi visto."""
+    if registro["id"] in ids_vistos:
+        return
+
+    ids_vistos.add(registro["id"])
+    disco.gravar_registro(registro)
+
+    if registro["evento"] == "canal_criado":
+        canal = registro["conteudo"]["canal"]
+        if canal not in canais:
+            canais.append(canal)
+
+    print(f"{NOME} aplicou replica {registro['id']} ({registro['evento']})", flush=True)
+
 
 def tratar_cliente(pedido):
     tipo = pedido["tipo"]
@@ -189,7 +226,7 @@ def tratar_cliente(pedido):
         if usuario == "":
             return criar("login_resp", NOME, {"mensagem": "nome de usuario vazio"}, "erro")
         usuarios.add(usuario)
-        disco.gravar("login", {"usuario": usuario})
+        registrar("login", {"usuario": usuario})
         return criar("login_resp", NOME, {"mensagem": f"bem-vindo, {usuario}"}, "ok")
 
     if tipo == "criar_canal":
@@ -199,7 +236,7 @@ def tratar_cliente(pedido):
         if canal in canais:
             return criar("criar_canal_resp", NOME, {"mensagem": "canal ja existe"}, "erro")
         canais.append(canal)
-        disco.gravar("canal_criado", {"canal": canal, "criado_por": pedido["origem"]})
+        registrar("canal_criado", {"canal": canal, "criado_por": pedido["origem"]})
         return criar("criar_canal_resp", NOME, {"mensagem": f"canal {canal} criado"}, "ok")
 
     if tipo == "listar_canais":
@@ -223,7 +260,7 @@ def tratar_cliente(pedido):
         publicar(canal, publicacao)
         print(formatar(f"{NOME} PUBLICOU em {canal}", publicacao), flush=True)
 
-        disco.gravar("publicacao", {"canal": canal, "mensagem": texto, "autor": pedido["origem"]})
+        registrar("publicacao", {"canal": canal, "mensagem": texto, "autor": pedido["origem"]})
         return criar("publicar_resp", NOME, {"mensagem": f"publicado em {canal}"}, "ok")
 
     return criar("erro", NOME, {"mensagem": f"tipo desconhecido: {tipo}"}, "erro")
@@ -298,6 +335,8 @@ while True:
         if aviso["tipo"] == "coordenador":
             coordenador = aviso["dados"]["coordenador"]
             print(f"{NOME} reconhece {coordenador} como coordenador", flush=True)
+        elif aviso["tipo"] == "replica":
+            aplicar_replica(aviso["dados"]["registro"])
 
     if clientes in eventos:
         pedido = desempacotar(clientes.recv())

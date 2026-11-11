@@ -4,6 +4,7 @@ import time
 
 PASTA = "/dados"
 
+
 class Armazenamento:
     def __init__(self, nome_servidor):
         self.caminho = os.path.join(PASTA, f"{nome_servidor}.jsonl")
@@ -11,15 +12,21 @@ class Armazenamento:
         if not os.path.exists(self.caminho):
             open(self.caminho, "w").close()
 
-    def gravar(self, evento, conteudo):
+    def gravar(self, evento, conteudo, id=None):
         """Grava um evento no fim do arquivo."""
         linha = json.dumps({
+            "id": id,
             "evento": evento,
             "timestamp": time.time(),
             "conteudo": conteudo,
         })
         with open(self.caminho, "a") as arquivo:
             arquivo.write(linha + "\n")
+
+    def gravar_registro(self, registro):
+        """Grava um registro ja montado, vindo da replicacao."""
+        with open(self.caminho, "a") as arquivo:
+            arquivo.write(json.dumps(registro) + "\n")
 
     def ler(self):
         """Le todos os eventos ja gravados."""
@@ -35,3 +42,7 @@ class Armazenamento:
                 if nome not in canais:
                     canais.append(nome)
         return canais
+
+    def carregar_ids(self):
+        """Ids ja aplicados, para nao duplicar eventos replicados."""
+        return {r["id"] for r in self.ler() if r.get("id")}

@@ -22,6 +22,10 @@ let rank = null;
 let coordenador = null;
 let recebidas = 0;
 let ajuste = 0;
+let contadorEventos = 0;
+const idsVistos = disco.carregarIds();
+// Serializa os envios no socket PUB: so um send por vez
+let filaPublicacao = Promise.resolve();
 
 const publicador = new zmq.Publisher();
 const inscritor = new zmq.Subscriber();
@@ -38,7 +42,11 @@ function horaCorrigida() {
 }
 
 async function publicar(canal, envelope) {
-  await publicador.send([canal, empacotar(envelope)]);
+  const anterior = filaPublicacao;
+  filaPublicacao = anterior
+    .catch(() => {})
+    .then(() => publicador.send([canal, empacotar(envelope)]));
+  return filaPublicacao;
 }
 
 async function perguntarReferencia(tipo, dados) {
@@ -170,6 +178,39 @@ async function heartbeat() {
   await perguntarReferencia("heartbeat", { servidor: NOME });
 }
 
+// Grava localmente e replica o evento para os outros servidores
+async function registrar(evento, conteudo) {
+  contadorEventos += 1;
+  const registro = {
+    id: `${NOME}-${contadorEventos}`,
+    evento,
+    timestamp: horaCorrigida(),
+    conteudo,
+  };
+
+  idsVistos.add(registro.id);
+  disco.gravarRegistro(registro);
+
+  const replica = criar("replica", NOME, { registro });
+  await publicar(TOPICO_SERVIDORES, replica);
+  console.log(`${NOME} replicou ${registro.id} (${evento})`);
+}
+
+// Aplica um evento vindo de outro servidor, se ainda nao foi visto
+function aplicarReplica(registro) {
+  if (idsVistos.has(registro.id)) return;
+
+  idsVistos.add(registro.id);
+  disco.gravarRegistro(registro);
+
+  if (registro.evento === "canal_criado") {
+    const canal = registro.conteudo.canal;
+    if (!canais.includes(canal)) canais.push(canal);
+  }
+
+  console.log(`${NOME} aplicou replica ${registro.id} (${registro.evento})`);
+}
+
 async function tratarCliente(pedido) {
   const { tipo, dados } = pedido;
 
@@ -179,7 +220,7 @@ async function tratarCliente(pedido) {
       return criar("login_resp", NOME, { mensagem: "nome de usuario vazio" }, "erro");
     }
     usuarios.add(usuario);
-    disco.gravar("login", { usuario });
+    await registrar("login", { usuario });
     return criar("login_resp", NOME, { mensagem: `bem-vindo, ${usuario}` }, "ok");
   }
 
@@ -192,7 +233,7 @@ async function tratarCliente(pedido) {
       return criar("criar_canal_resp", NOME, { mensagem: "canal ja existe" }, "erro");
     }
     canais.push(canal);
-    disco.gravar("canal_criado", { canal, criado_por: pedido.origem });
+    await registrar("canal_criado", { canal, criado_por: pedido.origem });
     return criar("criar_canal_resp", NOME, { mensagem: `canal ${canal} criado` }, "ok");
   }
 
@@ -220,7 +261,7 @@ async function tratarCliente(pedido) {
     await publicar(canal, publicacao);
     console.log(formatar(`${NOME} PUBLICOU em ${canal}`, publicacao));
 
-    disco.gravar("publicacao", { canal, mensagem: texto, autor: pedido.origem });
+    await registrar("publicacao", { canal, mensagem: texto, autor: pedido.origem });
     return criar("publicar_resp", NOME, { mensagem: `publicado em ${canal}` }, "ok");
   }
 
@@ -249,13 +290,14 @@ async function tratarPar(pedido) {
   return criar("erro", NOME, { mensagem: `tipo desconhecido: ${tipo}` }, "erro");
 }
 
-// Cada socket roda no seu proprio laco assincrono
 async function escutarTopico() {
   for await (const [, bruto] of inscritor) {
     const aviso = desempacotar(bruto);
     if (aviso.tipo === "coordenador") {
       coordenador = aviso.dados.coordenador;
       console.log(`${NOME} reconhece ${coordenador} como coordenador`);
+    } else if (aviso.tipo === "replica") {
+      aplicarReplica(aviso.dados.registro);
     }
   }
 }

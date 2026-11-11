@@ -18,6 +18,7 @@ services:
   servidor_js_1:
     build: ./node
     command: node servidor.js
+    restart: on-failure
     environment:
       NOME: servidor_js_1
       BROKER: tcp://broker:5556
@@ -33,6 +34,7 @@ services:
   servidor_js_2:
     build: ./node
     command: node servidor.js
+    restart: on-failure
     environment:
       NOME: servidor_js_2
       BROKER: tcp://broker:5556
@@ -48,6 +50,7 @@ services:
   servidor_py_1:
     build: ./python
     command: python servidor.py
+    restart: on-failure
     environment:
       NOME: servidor_py_1
       BROKER: tcp://broker:5556
@@ -63,6 +66,7 @@ services:
   servidor_py_2:
     build: ./python
     command: python servidor.py
+    restart: on-failure
     environment:
       NOME: servidor_py_2
       BROKER: tcp://broker:5556

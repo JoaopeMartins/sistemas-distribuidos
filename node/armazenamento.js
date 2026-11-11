@@ -11,13 +11,19 @@ class Armazenamento {
   }
 
   // Grava um evento no fim do arquivo
-  gravar(evento, conteudo) {
+  gravar(evento, conteudo, id = null) {
     const linha = JSON.stringify({
+      id,
       evento,
       timestamp: Date.now() / 1000,
       conteudo,
     });
     fs.appendFileSync(this.caminho, linha + "\n");
+  }
+
+  // Grava um registro ja montado, vindo da replicacao
+  gravarRegistro(registro) {
+    fs.appendFileSync(this.caminho, JSON.stringify(registro) + "\n");
   }
 
   // Le todos os eventos ja gravados
@@ -39,6 +45,15 @@ class Armazenamento {
       }
     }
     return canais;
+  }
+
+  // Ids ja aplicados, para nao duplicar eventos replicados
+  carregarIds() {
+    const ids = new Set();
+    for (const registro of this.ler()) {
+      if (registro.id) ids.add(registro.id);
+    }
+    return ids;
   }
 }
 
