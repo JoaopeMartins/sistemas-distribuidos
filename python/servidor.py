@@ -14,7 +14,7 @@ PROXY_SUB = os.environ.get("PROXY_SUB", "tcp://proxy:5558")
 REFERENCIA = os.environ.get("REFERENCIA", "tcp://referencia:5559")
 PORTA_PARES = os.environ.get("PORTA_PARES", "5560")
 
-TEMPO_LIMITE = 2000  # ms de espera por resposta de outro servidor
+TEMPO_LIMITE = 5000 # ms de espera por resposta de outro servidor
 TOPICO_SERVIDORES = "servers"
 
 REGRA_CANAL = re.compile(r"^[a-z0-9_-]{3,20}$")
@@ -102,7 +102,7 @@ def listar_servidores():
 
 def anunciar_coordenador():
     """Publica no topico servers que este servidor foi eleito."""
-    aviso = criar("coordenador", NOME, {"coordenador": NOME})
+    aviso = criar("coordenador", NOME, {"coordenador": NOME, "rank": rank})
     publicar(TOPICO_SERVIDORES, aviso)
     print(formatar(f"{NOME} ANUNCIOU coordenador", aviso), flush=True)
 
@@ -333,8 +333,16 @@ while True:
         topico, bruto = inscritor.recv_multipart()
         aviso = desempacotar(bruto)
         if aviso["tipo"] == "coordenador":
-            coordenador = aviso["dados"]["coordenador"]
-            print(f"{NOME} reconhece {coordenador} como coordenador", flush=True)
+            rank_anunciante = aviso["dados"].get("rank")
+            # Valentao: um anuncio de rank menor que o meu nao vale; eu assumo
+            if rank is not None and rank_anunciante is not None and rank_anunciante < rank:
+                print(f"{NOME} rejeita {aviso['dados']['coordenador']} "
+                      f"(rank {rank_anunciante}) como coordenador: "
+                      f"meu rank {rank} e maior", flush=True)
+                precisa_eleger = True
+            else:
+                coordenador = aviso["dados"]["coordenador"]
+                print(f"{NOME} reconhece {coordenador} como coordenador", flush=True)
         elif aviso["tipo"] == "replica":
             aplicar_replica(aviso["dados"]["registro"])
 
