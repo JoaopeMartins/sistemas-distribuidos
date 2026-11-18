@@ -9,7 +9,7 @@ const PROXY_SUB = process.env.PROXY_SUB || "tcp://proxy:5558";
 const REFERENCIA = process.env.REFERENCIA || "tcp://referencia:5559";
 const PORTA_PARES = process.env.PORTA_PARES || "5560";
 
-const TEMPO_LIMITE = 2000; // ms de espera por resposta de outro servidor
+const TEMPO_LIMITE = 5000; // ms de espera por resposta de outro servidor
 const TOPICO_SERVIDORES = "servers";
 
 const REGRA_CANAL = /^[a-z0-9_-]{3,20}$/;
@@ -26,6 +26,10 @@ let contadorEventos = 0;
 const idsVistos = disco.carregarIds();
 // Serializa os envios no socket PUB: so um send por vez
 let filaPublicacao = Promise.resolve();
+// Serializa os pedidos no socket REQ da referencia: send + receive por vez
+let filaReferencia = Promise.resolve();
+// Evita varias eleicoes em paralelo neste servidor
+let eleicaoEmAndamento = false;
 
 const publicador = new zmq.Publisher();
 const inscritor = new zmq.Subscriber();
@@ -50,14 +54,20 @@ async function publicar(canal, envelope) {
 }
 
 async function perguntarReferencia(tipo, dados) {
-  const pedido = criar(tipo, NOME, dados);
-  console.log(formatar(`${NOME} ENVIOU A REFERENCIA`, pedido));
-  await refSocket.send(empacotar(pedido));
+  const anterior = filaReferencia;
+  filaReferencia = anterior
+    .catch(() => {})
+    .then(async () => {
+      const pedido = criar(tipo, NOME, dados);
+      console.log(formatar(`${NOME} ENVIOU A REFERENCIA`, pedido));
+      await refSocket.send(empacotar(pedido));
 
-  const [quadro] = await refSocket.receive();
-  const resposta = desempacotar(quadro);
-  console.log(formatar(`${NOME} RECEBEU DA REFERENCIA`, resposta));
-  return resposta;
+      const [quadro] = await refSocket.receive();
+      const resposta = desempacotar(quadro);
+      console.log(formatar(`${NOME} RECEBEU DA REFERENCIA`, resposta));
+      return resposta;
+    });
+  return filaReferencia;
 }
 
 // Pergunta a outro servidor. Devolve null se nao responder a tempo.
@@ -94,36 +104,46 @@ async function listarServidores() {
 
 // Publica no topico servers que este servidor foi eleito
 async function anunciarCoordenador() {
-  const aviso = criar("coordenador", NOME, { coordenador: NOME });
+  const aviso = criar("coordenador", NOME, { coordenador: NOME, rank });
   await publicar(TOPICO_SERVIDORES, aviso);
   console.log(formatar(`${NOME} ANUNCIOU coordenador`, aviso));
 }
 
 // Algoritmo do valentao: quem tem o maior rank vence
 async function iniciarEleicao() {
-  if (coordenador === NOME) {
+  if (eleicaoEmAndamento) {
+    console.log(`${NOME} ja tem uma eleicao em andamento`);
+    return;
+  }
+  eleicaoEmAndamento = true;
+
+  try {
+    if (coordenador === NOME) {
+      await anunciarCoordenador();
+      return;
+    }
+    console.log(`${NOME} iniciando eleicao`);
+    const lista = await listarServidores();
+    const maiores = lista.filter((s) => s.rank > (rank || 0));
+
+    let respondeu = false;
+    for (const s of maiores) {
+      const resposta = await perguntarPar(s.servidor, "eleicao", {});
+      if (resposta !== null && resposta.status === "ok") respondeu = true;
+    }
+
+    if (respondeu) {
+      // Alguem com rank maior assumiu; o anuncio chega pelo topico
+      console.log(`${NOME} cedeu a eleicao a um servidor de rank maior`);
+      return;
+    }
+
+    coordenador = NOME;
+    console.log(`${NOME} venceu a eleicao e e o novo coordenador`);
     await anunciarCoordenador();
-    return;
+  } finally {
+    eleicaoEmAndamento = false;
   }
-  console.log(`${NOME} iniciando eleicao`);
-  const lista = await listarServidores();
-  const maiores = lista.filter((s) => s.rank > (rank || 0));
-
-  let respondeu = false;
-  for (const s of maiores) {
-    const resposta = await perguntarPar(s.servidor, "eleicao", {});
-    if (resposta !== null && resposta.status === "ok") respondeu = true;
-  }
-
-  if (respondeu) {
-    // Alguem com rank maior assumiu; o anuncio chega pelo topico
-    console.log(`${NOME} cedeu a eleicao a um servidor de rank maior`);
-    return;
-  }
-
-  coordenador = NOME;
-  console.log(`${NOME} venceu a eleicao e e o novo coordenador`);
-  await anunciarCoordenador();
 }
 
 // Coordenador: media das horas de todos os servidores conhecidos
@@ -294,6 +314,18 @@ async function escutarTopico() {
   for await (const [, bruto] of inscritor) {
     const aviso = desempacotar(bruto);
     if (aviso.tipo === "coordenador") {
+      const rankAnunciante = aviso.dados.rank;
+      // Valentao: um anuncio de rank menor que o meu nao vale; eu assumo
+      if (rank !== null && rankAnunciante != null && rankAnunciante < rank) {
+        console.log(
+          `${NOME} rejeita ${aviso.dados.coordenador} (rank ${rankAnunciante}) ` +
+            `como coordenador: meu rank ${rank} e maior`
+        );
+        iniciarEleicao().catch((erro) =>
+          console.log(`${NOME} erro na eleicao: ${erro.message}`)
+        );
+        continue;
+      }
       coordenador = aviso.dados.coordenador;
       console.log(`${NOME} reconhece ${coordenador} como coordenador`);
     } else if (aviso.tipo === "replica") {
@@ -312,7 +344,11 @@ async function escutarPares() {
     await pares.send(empacotar(resposta));
 
     // Rank maior assume a eleicao, conforme o algoritmo do valentao
-    if (pedido.tipo === "eleicao") iniciarEleicao();
+    if (pedido.tipo === "eleicao") {
+      iniciarEleicao().catch((erro) =>
+        console.log(`${NOME} erro na eleicao: ${erro.message}`)
+      );
+    }
   }
 }
 
